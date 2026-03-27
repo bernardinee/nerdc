@@ -7,44 +7,153 @@
 //   recallVehicle(vehicleId)       POST /vehicles/:id/recall
 
 import type { Vehicle, VehicleType, RadioChannel } from '@/types'
+import type { Incident } from '@/types'
 import { vehicleStore, incidentStore, messageStore } from '../mocks/mockStore'
 import { sleep, generateId } from '@/lib/utils'
+import { authService } from './authService'
 
-function simulateMovement(vehicle: Vehicle): Vehicle {
-  if (['available', 'offline'].includes(vehicle.status) || vehicle.speed === 0) return vehicle
+// ─── Config ───────────────────────────────────────────────────────────────────
 
-  const speedFactor = (vehicle.speed / 3600) * 0.001
-  const radians = (vehicle.heading * Math.PI) / 180
-  const dlat = Math.cos(radians) * speedFactor * (0.8 + Math.random() * 0.4)
-  const dlng = Math.sin(radians) * speedFactor * (0.8 + Math.random() * 0.4)
-  const newSpeed = Math.max(0, vehicle.speed + (Math.random() - 0.5) * 5)
-  const newHeading = (vehicle.heading + (Math.random() - 0.5) * 10 + 360) % 360
+const DISPATCH_BASE = (import.meta.env.VITE_DISPATCH_URL as string | undefined)?.trim() ?? ''
+const WS_BASE       = (import.meta.env.VITE_WS_URL as string | undefined)?.trim() ?? ''
+const IS_MOCK       = DISPATCH_BASE === ''
 
+// ─── Live fetch helper ────────────────────────────────────────────────────────
+
+async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = authService.getToken()
+  return fetch(`${DISPATCH_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers ?? {}),
+    },
+  })
+}
+
+// ─── Type / status mappings ───────────────────────────────────────────────────
+
+const VTYPE_FROM_BACKEND: Record<string, string> = {
+  AMBULANCE:  'ambulance',
+  FIRE_TRUCK: 'fire_truck',
+  POLICE:     'police',
+}
+
+const VSTATUS_FROM_BACKEND: Record<string, string> = {
+  AVAILABLE:        'available',
+  ON_DUTY:          'en_route',
+  OUT_OF_SERVICE:   'offline',
+}
+
+// ─── Normalise backend response → Vehicle ─────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normaliseVehicle(data: any): Vehicle {
   return {
-    ...vehicle,
-    coordinates: { lat: vehicle.coordinates.lat + dlat, lng: vehicle.coordinates.lng + dlng },
-    speed: Math.round(newSpeed),
-    heading: Math.round(newHeading),
+    id:                 data.id,
+    callSign:           data.registration_number ?? data.id,
+    type:               (VTYPE_FROM_BACKEND[data.vehicle_type] ?? data.vehicle_type?.toLowerCase() ?? 'ambulance') as VehicleType,
+    status:             (VSTATUS_FROM_BACKEND[data.status] ?? data.status?.toLowerCase() ?? 'available') as Vehicle['status'],
+    stationId:          data.station_id ?? '',
+    driverName:         data.driver_name ?? 'Unknown',
+    unitName:           data.registration_number ?? data.id,
+    coordinates:        { lat: data.latitude ?? 5.6037, lng: data.longitude ?? -0.187 },
+    speed:              0,
+    heading:            0,
+    fuelLevel:          85,
+    channel:            'command' as const,
+    assignedIncidentId: data.current_incident_id ?? undefined,
+    lastUpdated:        data.last_updated ?? new Date().toISOString(),
   }
 }
 
+// ─── Mock movement simulation ─────────────────────────────────────────────────
+
+function simulateMovement(vehicle: Vehicle, incidents: Incident[]): Vehicle {
+  if (['available', 'offline'].includes(vehicle.status) || vehicle.speed === 0) return vehicle
+
+  // En-route: move toward the assigned incident
+  if ((vehicle.status === 'en_route' || vehicle.status === 'dispatched') && vehicle.assignedIncidentId) {
+    const incident = incidents.find((i) => i.id === vehicle.assignedIncidentId)
+    if (incident) {
+      const tLat = incident.location.lat
+      const tLng = incident.location.lng
+      const dLat = tLat - vehicle.coordinates.lat
+      const dLng = tLng - vehicle.coordinates.lng
+      const dist = Math.sqrt(dLat * dLat + dLng * dLng)
+
+      if (dist < 0.0005) {
+        // Arrived — mark on_scene
+        return { ...vehicle, coordinates: { lat: tLat, lng: tLng }, status: 'on_scene', speed: 0 }
+      }
+
+      const step = 0.0003 + Math.random() * 0.0002
+      const ratio = step / dist
+      return {
+        ...vehicle,
+        coordinates: {
+          lat: vehicle.coordinates.lat + dLat * ratio,
+          lng: vehicle.coordinates.lng + dLng * ratio,
+        },
+        speed:   Math.round(50 + Math.random() * 30),
+        heading: Math.round(((Math.atan2(dLng, dLat) * 180) / Math.PI + 360) % 360),
+        lastUpdated: new Date().toISOString(),
+      }
+    }
+  }
+
+  // Default drift for returning / other moving vehicles
+  const speedFactor = (vehicle.speed / 3600) * 0.001
+  const radians = (vehicle.heading * Math.PI) / 180
+  return {
+    ...vehicle,
+    coordinates: {
+      lat: vehicle.coordinates.lat + Math.cos(radians) * speedFactor * (0.8 + Math.random() * 0.4),
+      lng: vehicle.coordinates.lng + Math.sin(radians) * speedFactor * (0.8 + Math.random() * 0.4),
+    },
+    speed:   Math.round(Math.max(0, vehicle.speed + (Math.random() - 0.5) * 5)),
+    heading: Math.round((vehicle.heading + (Math.random() - 0.5) * 10 + 360) % 360),
+    lastUpdated: new Date().toISOString(),
+  }
+}
+
+// ─── Public service ───────────────────────────────────────────────────────────
+
 export const vehicleService = {
   async getVehicles(): Promise<Vehicle[]> {
-    await sleep(350)
-    return vehicleStore.getAll()
+    if (IS_MOCK) {
+      await sleep(350)
+      return vehicleStore.getAll()
+    }
+    const res = await authFetch('/vehicles')
+    if (!res.ok) throw new Error(`Failed to fetch vehicles (HTTP ${res.status})`)
+    const data = await res.json()
+    return data.map(normaliseVehicle)
   },
 
   async getVehicleById(id: string): Promise<Vehicle | undefined> {
-    await sleep(200)
-    return vehicleStore.getById(id)
+    if (IS_MOCK) {
+      await sleep(200)
+      return vehicleStore.getById(id)
+    }
+    const res = await authFetch(`/vehicles/${id}`)
+    if (!res.ok) return undefined
+    return normaliseVehicle(await res.json())
   },
 
   // GET /vehicles/:id/location
   async getVehicleLocation(id: string): Promise<{ lat: number; lng: number; updatedAt: string } | undefined> {
-    await sleep(150)
-    const v = vehicleStore.getById(id)
-    if (!v) return undefined
-    return { lat: v.coordinates.lat, lng: v.coordinates.lng, updatedAt: v.lastUpdated }
+    if (IS_MOCK) {
+      await sleep(150)
+      const v = vehicleStore.getById(id)
+      if (!v) return undefined
+      return { lat: v.coordinates.lat, lng: v.coordinates.lng, updatedAt: v.lastUpdated }
+    }
+    const res = await authFetch(`/vehicles/${id}/location`)
+    if (!res.ok) return undefined
+    const data = await res.json()
+    return { lat: data.latitude, lng: data.longitude, updatedAt: data.last_updated }
   },
 
   // POST /vehicles/register
@@ -202,10 +311,53 @@ export const vehicleService = {
   },
 
   subscribeToVehicleUpdates(cb: (vehicles: Vehicle[]) => void, intervalMs = 2000): () => void {
-    const unsubStore = vehicleStore.subscribe(cb)
-    const timer = setInterval(() => {
-      vehicleStore.bulkUpdate(vehicleStore.getAll().map(simulateMovement))
-    }, intervalMs)
-    return () => { clearInterval(timer); unsubStore() }
+    if (IS_MOCK) {
+      const unsubStore = vehicleStore.subscribe(cb)
+      const timer = setInterval(() => {
+        const incidents = incidentStore.getAll()
+        vehicleStore.bulkUpdate(vehicleStore.getAll().map((v) => simulateMovement(v, incidents)))
+      }, intervalMs)
+      return () => { clearInterval(timer); unsubStore() }
+    }
+
+    // Live mode: poll REST + WebSocket for active vehicles
+    let stopped = false
+    const wsConnections = new Map<string, WebSocket>()
+
+    async function poll() {
+      try {
+        const res = await authFetch('/vehicles')
+        if (!res.ok) return
+        const data = await res.json()
+        const vehicles: Vehicle[] = data.map(normaliseVehicle)
+        cb(vehicles)
+
+        // Open WebSocket for each ON_DUTY vehicle
+        if (WS_BASE) {
+          for (const v of vehicles) {
+            if (v.status === 'en_route' && !wsConnections.has(v.id)) {
+              const ws = new WebSocket(`${WS_BASE}/vehicles/${v.id}/ws`)
+              ws.onmessage = async () => {
+                // Re-poll on any location update
+                const r = await authFetch('/vehicles')
+                if (r.ok) cb((await r.json()).map(normaliseVehicle))
+              }
+              ws.onclose = () => wsConnections.delete(v.id)
+              wsConnections.set(v.id, ws)
+            }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    poll()
+    const timer = setInterval(() => { if (!stopped) poll() }, intervalMs)
+
+    return () => {
+      stopped = true
+      clearInterval(timer)
+      wsConnections.forEach((ws) => ws.close())
+      wsConnections.clear()
+    }
   },
 }

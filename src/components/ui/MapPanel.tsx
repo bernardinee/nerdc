@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { MapPin, AlertCircle } from 'lucide-react'
 import type { Vehicle } from '@/types'
+import { useThemeStore } from '@/store/useThemeStore'
 
 // Leaflet is imported dynamically to avoid SSR issues and keep bundle clean
 import type * as L from 'leaflet'
@@ -17,9 +17,14 @@ interface MapPanelProps {
 
 const DEFAULT_CENTER = { lat: 5.6037, lng: -0.2070 }
 
-// CartoDB Dark Matter — completely free, no API key, no account needed
-const TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+// Pulse colors by vehicle type
+const PULSE_COLOR: Record<string, string> = {
+  ambulance:  'rgba(34,197,94,0.35)',
+  fire_truck: 'rgba(249,115,22,0.35)',
+  police:     'rgba(59,130,246,0.35)',
+  rescue:     'rgba(168,85,247,0.35)',
+  command:    'rgba(6,182,212,0.35)',
+}
 
 function vehicleColor(status: string): string {
   if (status === 'available') return '#22c55e'
@@ -28,11 +33,10 @@ function vehicleColor(status: string): string {
   return '#00b8f5'
 }
 
-// Build a circular SVG icon for each vehicle marker
-function makeVehicleIconSvg(status: string, label: string): string {
+// Build a circular SVG icon for each vehicle marker, with optional pulse ring for active vehicles
+function makeVehicleIconHtml(status: string, label: string, type: string): string {
   const color = vehicleColor(status)
-  return `
-    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
       <circle cx="14" cy="14" r="12" fill="${color}" stroke="white" stroke-width="2"/>
       <filter id="glow">
         <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
@@ -40,8 +44,20 @@ function makeVehicleIconSvg(status: string, label: string): string {
       </filter>
       <circle cx="14" cy="14" r="12" fill="${color}" stroke="white" stroke-width="2" filter="url(#glow)" opacity="0.5"/>
       <text x="14" y="18" text-anchor="middle" font-size="11" font-weight="bold" fill="white" font-family="Inter,sans-serif">${label}</text>
-    </svg>
-  `.trim()
+    </svg>`.trim()
+
+  const isActive = ['en_route', 'dispatched', 'on_scene'].includes(status)
+  if (!isActive) {
+    return `<div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center">${svg}</div>`
+  }
+
+  const pulseColor = PULSE_COLOR[type] ?? 'rgba(6,182,212,0.35)'
+  const pulseClass = status === 'on_scene' ? 'vehicle-pulse-fast' : 'vehicle-pulse-ring'
+
+  return `<div style="position:relative;width:36px;height:36px;display:flex;align-items:center;justify-content:center">
+  <div class="${pulseClass}" style="position:absolute;width:28px;height:28px;border-radius:50%;background:${pulseColor};pointer-events:none"></div>
+  ${svg}
+</div>`
 }
 
 export function MapPanel({
@@ -49,10 +65,19 @@ export function MapPanel({
 }: MapPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
+  const tileLayerRef = useRef<L.TileLayer | null>(null)
   const vehicleMarkersRef = useRef<Map<string, L.Marker>>(new Map())
   const pickerMarkerRef = useRef<L.Marker | null>(null)
   const [leafletReady, setLeafletReady] = useState(false)
   const leafletRef = useRef<typeof L | null>(null)
+
+  const theme = useThemeStore((s) => s.theme)
+
+  const tileUrl = theme === 'light'
+    ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
+    : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+
+  const tileAttribution = '&copy; <a href="https://carto.com/">CARTO</a>'
 
   // ── Load Leaflet CSS + module once ──────────────────────────────────────────
   useEffect(() => {
@@ -91,11 +116,13 @@ export function MapPanel({
       attributionControl: true,
     })
 
-    L.tileLayer(TILE_URL, {
-      attribution: TILE_ATTRIBUTION,
+    const tl = L.tileLayer(tileUrl, {
+      attribution: tileAttribution,
       subdomains: 'abcd',
       maxZoom: 19,
-    }).addTo(map)
+    })
+    tl.addTo(map)
+    tileLayerRef.current = tl
 
     // Style the attribution to match dark theme
     map.attributionControl.setPrefix('')
@@ -114,11 +141,31 @@ export function MapPanel({
     return () => {
       map.remove()
       mapRef.current = null
+      tileLayerRef.current = null
       vehicleMarkersRef.current.clear()
       pickerMarkerRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leafletReady])
+
+  // ── Swap tile layer when theme changes ───────────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current || !leafletRef.current) return
+    const L = leafletRef.current
+    const map = mapRef.current
+
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current)
+    }
+    const tl = L.tileLayer(tileUrl, {
+      attribution: tileAttribution,
+      subdomains: 'abcd',
+      maxZoom: 19,
+    })
+    tl.addTo(map)
+    tileLayerRef.current = tl
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme])
 
   // ── Pan when center prop changes (e.g. selecting a vehicle) ─────────────────
   useEffect(() => {
@@ -137,13 +184,13 @@ export function MapPanel({
     for (const v of vehicles) {
       seen.add(v.id)
       const pos: L.LatLngExpression = [v.coordinates.lat, v.coordinates.lng]
-      const svgStr = makeVehicleIconSvg(v.status, v.callSign.slice(0, 1))
+      const iconHtml = makeVehicleIconHtml(v.status, v.callSign.slice(0, 1), v.type)
       const icon = L.divIcon({
-        html: svgStr,
+        html: iconHtml,
         className: '',
-        iconSize: [28, 28],
-        iconAnchor: [14, 14],
-        popupAnchor: [0, -16],
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+        popupAnchor: [0, -20],
       })
 
       const existing = vehicleMarkersRef.current.get(v.id)
@@ -235,3 +282,4 @@ export function MapPanel({
     </div>
   )
 }
+

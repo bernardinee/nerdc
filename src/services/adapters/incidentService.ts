@@ -2,10 +2,10 @@
  * Incident Service
  *
  * Mock mode:  uses in-memory store, auto-dispatches nearest unit on creation
- * Live mode:  calls real backend
+ * Live mode:  calls real backend (VITE_INCIDENT_URL)
  *
  * Endpoint map:
- *   getIncidents()              GET  /incidents
+ *   getIncidents()              GET  /incidents/open
  *   getOpenIncidents()          GET  /incidents/open
  *   getIncidentById(id)         GET  /incidents/:id
  *   createIncident(payload)     POST /incidents          (auto-assigns nearest unit)
@@ -16,6 +16,89 @@
 import type { CreateIncidentPayload, Incident, IncidentStatus, IncidentType, VehicleType } from '@/types'
 import { incidentStore, vehicleStore, messageStore } from '../mocks/mockStore'
 import { sleep, generateId } from '@/lib/utils'
+import { authService } from './authService'
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+const INCIDENT_BASE = (import.meta.env.VITE_INCIDENT_URL as string | undefined)?.trim() ?? ''
+const IS_MOCK = INCIDENT_BASE === ''
+
+// ─── Live fetch helper ────────────────────────────────────────────────────────
+
+async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = authService.getToken()
+  return fetch(`${INCIDENT_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers ?? {}),
+    },
+  })
+}
+
+// ─── Type / status mappings ───────────────────────────────────────────────────
+
+// Frontend type → backend UPPERCASE
+const TYPE_TO_BACKEND: Record<string, string> = {
+  medical:        'MEDICAL',
+  accident:       'ACCIDENT',
+  fire:           'FIRE',
+  explosion:      'FIRE',
+  crime:          'CRIME',
+  flood:          'OTHER',
+  missing_person: 'OTHER',
+  other:          'OTHER',
+}
+
+// Backend UPPERCASE → frontend lowercase
+const TYPE_FROM_BACKEND: Record<string, string> = {
+  MEDICAL:  'medical',
+  FIRE:     'fire',
+  CRIME:    'crime',
+  ACCIDENT: 'accident',
+  OTHER:    'other',
+}
+
+const STATUS_FROM_BACKEND: Record<string, string> = {
+  CREATED:     'created',
+  DISPATCHED:  'dispatched',
+  IN_PROGRESS: 'in_progress',
+  RESOLVED:    'resolved',
+}
+
+const STATUS_TO_BACKEND: Record<string, string> = {
+  created:     'CREATED',
+  pending:     'CREATED',
+  dispatched:  'DISPATCHED',
+  in_progress: 'IN_PROGRESS',
+  resolved:    'RESOLVED',
+}
+
+// ─── Normalise backend response → Incident ────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normaliseIncident(data: any): Incident {
+  return {
+    id:               data.id,
+    citizenName:      data.citizen_name,
+    type:             (TYPE_FROM_BACKEND[data.incident_type] ?? data.incident_type?.toLowerCase() ?? 'other') as IncidentType,
+    status:           (STATUS_FROM_BACKEND[data.status] ?? data.status?.toLowerCase() ?? 'created') as IncidentStatus,
+    location: {
+      lat:     data.latitude,
+      lng:     data.longitude,
+      address: data.address ?? '',
+      region:  data.region ?? '',
+    },
+    notes:            data.notes ?? '',
+    createdBy:        data.created_by ?? '',
+    assignedVehicleId: data.assigned_unit_id ?? undefined,
+    createdAt:        data.created_at,
+    updatedAt:        data.updated_at,
+  }
+}
+
+// ─── Mock helpers ─────────────────────────────────────────────────────────────
 
 // Haversine distance in km
 function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -65,94 +148,139 @@ function autoSelectVehicle(incidentType: IncidentType, lat: number, lng: number)
   ).id
 }
 
+// ─── Public service ───────────────────────────────────────────────────────────
+
 export const incidentService = {
-  // GET /incidents
+  // GET /incidents/open (live) | all mock incidents
   async getIncidents(): Promise<Incident[]> {
-    await sleep(400)
-    return incidentStore.getAll()
+    if (IS_MOCK) {
+      await sleep(400)
+      return incidentStore.getAll()
+    }
+    const res = await authFetch('/incidents/open')
+    if (!res.ok) throw new Error(`Failed to fetch incidents (HTTP ${res.status})`)
+    const data = await res.json()
+    return data.map(normaliseIncident)
   },
 
   // GET /incidents/open
   async getOpenIncidents(): Promise<Incident[]> {
-    await sleep(300)
-    return incidentStore.getAll().filter((i) => i.status !== 'resolved')
+    if (IS_MOCK) {
+      await sleep(300)
+      return incidentStore.getAll().filter((i) => i.status !== 'resolved')
+    }
+    const res = await authFetch('/incidents/open')
+    if (!res.ok) throw new Error(`Failed to fetch open incidents (HTTP ${res.status})`)
+    const data = await res.json()
+    return data.map(normaliseIncident)
   },
 
   // GET /incidents/:id
   async getIncidentById(id: string): Promise<Incident | undefined> {
-    await sleep(250)
-    return incidentStore.getById(id)
+    if (IS_MOCK) {
+      await sleep(250)
+      return incidentStore.getById(id)
+    }
+    const res = await authFetch(`/incidents/${id}`)
+    if (!res.ok) return undefined
+    return normaliseIncident(await res.json())
   },
 
-  // POST /incidents — creates incident then auto-assigns nearest appropriate unit
+  // POST /incidents — creates incident then auto-assigns nearest appropriate unit (mock only)
   async createIncident(payload: CreateIncidentPayload): Promise<Incident> {
-    await sleep(700)
-    const incident: Incident = {
-      id: `INC-${new Date().getFullYear()}-${generateId()}`,
-      ...payload,
-      status: 'created',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-    incidentStore.add(incident)
-
-    // Auto-dispatch nearest appropriate vehicle
-    const vehicleId = autoSelectVehicle(payload.type, payload.location.lat, payload.location.lng)
-    if (vehicleId) {
-      const vehicle = vehicleStore.getById(vehicleId)!
-      vehicleStore.update(vehicleId, {
-        status: 'en_route',
-        assignedIncidentId: incident.id,
-        speed: Math.round(60 + Math.random() * 30),
-        heading: Math.round(Math.random() * 360),
-      })
-      incidentStore.update(incident.id, {
-        status: 'dispatched',
-        assignedVehicleId: vehicleId,
+    if (IS_MOCK) {
+      await sleep(700)
+      const incident: Incident = {
+        id: `INC-${new Date().getFullYear()}-${generateId()}`,
+        ...payload,
+        status: 'created',
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      })
-      // Radio dispatch message
-      const eta = Math.round(4 + Math.random() * 10)
-      messageStore.add({
-        id: `MSG-${generateId()}`,
-        fromId: 'COMMAND',
-        fromName: 'NERDC Command',
-        toId: vehicleId,
-        toName: vehicle.callSign,
-        content: `${vehicle.callSign}, auto-dispatched to ${incident.id} — ${incident.location.address}. Nearest available unit. ETA ~${eta} min.`,
-        type: 'command',
-        channel: vehicle.channel,
-        timestamp: new Date().toISOString(),
-        acknowledged: false,
-        direction: 'outbound',
-      })
-      setTimeout(() => {
+      }
+      incidentStore.add(incident)
+
+      // Auto-dispatch nearest appropriate vehicle
+      const vehicleId = autoSelectVehicle(payload.type, payload.location.lat, payload.location.lng)
+      if (vehicleId) {
+        const vehicle = vehicleStore.getById(vehicleId)!
+        vehicleStore.update(vehicleId, {
+          status: 'en_route',
+          assignedIncidentId: incident.id,
+          speed: Math.round(60 + Math.random() * 30),
+          heading: Math.round(Math.random() * 360),
+        })
+        incidentStore.update(incident.id, {
+          status: 'dispatched',
+          assignedVehicleId: vehicleId,
+          updatedAt: new Date().toISOString(),
+        })
+        // Radio dispatch message
+        const eta = Math.round(4 + Math.random() * 10)
         messageStore.add({
           id: `MSG-${generateId()}`,
-          fromId: vehicleId,
-          fromName: vehicle.callSign,
-          toId: 'COMMAND',
-          toName: 'NERDC Command',
-          content: `${vehicle.callSign} copies. En route. ETA ${eta} minutes. Over.`,
-          type: 'acknowledgment',
+          fromId: 'COMMAND',
+          fromName: 'NERDC Command',
+          toId: vehicleId,
+          toName: vehicle.callSign,
+          content: `${vehicle.callSign}, auto-dispatched to ${incident.id} — ${incident.location.address}. Nearest available unit. ETA ~${eta} min.`,
+          type: 'command',
           channel: vehicle.channel,
           timestamp: new Date().toISOString(),
-          acknowledged: true,
-          direction: 'inbound',
+          acknowledged: false,
+          direction: 'outbound',
         })
-      }, 2500 + Math.random() * 2000)
+        setTimeout(() => {
+          messageStore.add({
+            id: `MSG-${generateId()}`,
+            fromId: vehicleId,
+            fromName: vehicle.callSign,
+            toId: 'COMMAND',
+            toName: 'NERDC Command',
+            content: `${vehicle.callSign} copies. En route. ETA ${eta} minutes. Over.`,
+            type: 'acknowledgment',
+            channel: vehicle.channel,
+            timestamp: new Date().toISOString(),
+            acknowledged: true,
+            direction: 'inbound',
+          })
+        }, 2500 + Math.random() * 2000)
+      }
+
+      return incidentStore.getById(incident.id)!
     }
 
-    return incidentStore.getById(incident.id)!
+    // Live mode
+    const res = await authFetch('/incidents', {
+      method: 'POST',
+      body: JSON.stringify({
+        citizen_name:  payload.citizenName,
+        incident_type: TYPE_TO_BACKEND[payload.type] ?? 'OTHER',
+        latitude:      payload.location.lat,
+        longitude:     payload.location.lng,
+        notes:         payload.notes || undefined,
+      }),
+    })
+    if (!res.ok) throw new Error(`Failed to create incident (HTTP ${res.status})`)
+    return normaliseIncident(await res.json())
   },
 
   // PUT /incidents/:id/status
   async updateIncidentStatus(id: string, status: IncidentStatus): Promise<Incident> {
-    await sleep(400)
-    const patch: Partial<Incident> = { status, updatedAt: new Date().toISOString() }
-    if (status === 'resolved') patch.resolvedAt = new Date().toISOString()
-    incidentStore.update(id, patch)
-    return incidentStore.getById(id)!
+    if (IS_MOCK) {
+      await sleep(400)
+      const patch: Partial<Incident> = { status, updatedAt: new Date().toISOString() }
+      if (status === 'resolved') patch.resolvedAt = new Date().toISOString()
+      incidentStore.update(id, patch)
+      return incidentStore.getById(id)!
+    }
+
+    // Live mode
+    const res = await authFetch(`/incidents/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status: STATUS_TO_BACKEND[status] ?? status.toUpperCase() }),
+    })
+    if (!res.ok) throw new Error(`Failed to update status (HTTP ${res.status})`)
+    return normaliseIncident(await res.json())
   },
 
   // PUT /incidents/:id/assign

@@ -3,15 +3,15 @@
  *
  * Runs in one of two modes, selected automatically:
  *
- *   MOCK MODE  — VITE_API_BASE_URL is empty / not set
+ *   MOCK MODE  — VITE_AUTH_URL is empty / not set
  *                Uses in-memory mock data. No backend required.
  *                Supports registering new accounts (stored in sessionStorage
  *                so they survive page refreshes within the same tab).
  *
- *   LIVE MODE  — VITE_API_BASE_URL is set (e.g. http://localhost:8000)
+ *   LIVE MODE  — VITE_AUTH_URL is set (e.g. http://localhost:8001)
  *                Calls the real FastAPI backend.
  *
- * Switch is automatic — just set VITE_API_BASE_URL when the backend is ready.
+ * Switch is automatic — just set VITE_AUTH_URL when the backend is ready.
  */
 
 import type { Admin, AuthTokens, RegisterPayload } from '@/types'
@@ -19,13 +19,22 @@ import { MOCK_ADMINS, MOCK_CREDENTIALS } from '../mocks/mockData'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ?? ''
+const API_BASE = (import.meta.env.VITE_AUTH_URL as string | undefined)?.trim() ?? ''
 const IS_MOCK  = API_BASE === ''
 
 const KEY_ACCESS  = 'nerdc_access_token'
 const KEY_REFRESH = 'nerdc_refresh_token'
 const KEY_USER    = 'nerdc_user'
 const KEY_MOCK_USERS = 'nerdc_mock_users'   // extra registered users (mock only)
+
+// ─── Role mapping ─────────────────────────────────────────────────────────────
+
+const ROLE_MAP: Record<string, string> = {
+  SYSTEM_ADMIN:      'system_admin',
+  HOSPITAL_ADMIN:    'hospital_admin',
+  POLICE_ADMIN:      'police_admin',
+  FIRE_SERVICE_ADMIN: 'fire_admin',
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -61,8 +70,8 @@ function normaliseAdmin(data: any): Admin {
     id:           String(data.id ?? data.user_id ?? ''),
     name:         data.name ?? data.full_name ?? data.username ?? data.email,
     email:        data.email,
-    role:         data.role,
-    organization: data.organization ?? 'NERDC',
+    role:         (ROLE_MAP[data.role] ?? data.role?.toLowerCase()) as Admin['role'],
+    organization: data.station_id ?? data.organization ?? 'NERDC',
     lastLogin:    data.last_login ?? data.lastLogin ?? new Date().toISOString(),
     avatar:       data.avatar ?? undefined,
   }
@@ -222,7 +231,13 @@ export const authService = {
       return newUser
     }
 
-    const res = await livePost('/auth/register', payload)
+    const res = await livePost('/auth/register', {
+      name:       payload.name,
+      email:      payload.email,
+      password:   payload.password,
+      role:       payload.role.toUpperCase(),
+      station_id: payload.organization ?? '',
+    })
     if (!res.ok) throw new Error(await extractError(res, 'Registration failed.'))
     const tokens: AuthTokens = await res.json()
     saveTokens(tokens)
