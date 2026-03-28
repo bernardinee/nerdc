@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   AlertTriangle, CheckCircle2, Radio, Truck, Clock,
-  RefreshCw, ChevronDown, Zap, X,
+  RefreshCw, ChevronDown, Zap, X, Plus,
 } from 'lucide-react'
 import { StatCard } from '@/components/ui/StatCard'
 import { GlassCard } from '@/components/ui/GlassCard'
@@ -176,10 +176,8 @@ export default function DispatchPage() {
           <div className="space-y-2.5">
             {filtered.map((inc) => {
               const transitions = STATUS_TRANSITIONS[inc.status]
-              const isUnassigned = ['created', 'pending'].includes(inc.status) && !inc.assignedVehicleId
-              const assignedVehicle = inc.assignedVehicleId
-                ? vehicles.find((v) => v.id === inc.assignedVehicleId)
-                : null
+              const assignedVehicles = vehicles.filter((v) => v.assignedIncidentId === inc.id)
+              const canAddUnits = !['resolved'].includes(inc.status)
 
               return (
                 <div
@@ -203,29 +201,37 @@ export default function DispatchPage() {
                       <p className="text-sm font-semibold text-white truncate">{inc.citizenName}</p>
                       <p className="text-xs text-slate-400 truncate">{inc.location.address}</p>
 
-                      {/* Assigned vehicle chip */}
-                      {assignedVehicle && (
-                        <div className="flex items-center gap-2 mt-1.5">
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-xs">
-                            <span>{VEHICLE_EMOJI[assignedVehicle.type]}</span>
-                            <span className="text-cyan-300 font-semibold">{assignedVehicle.callSign}</span>
-                            <StatusBadge type="vehicle-status" value={assignedVehicle.status} className="scale-90" />
+                      {/* All assigned vehicles */}
+                      {(() => {
+                        const assignedVehicles = vehicles.filter((v) => v.assignedIncidentId === inc.id)
+                        if (assignedVehicles.length === 0) return null
+                        return (
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                            {assignedVehicles.map((v) => (
+                              <div key={v.id} className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-xs">
+                                  <span>{VEHICLE_EMOJI[v.type]}</span>
+                                  <span className="text-cyan-300 font-semibold">{v.callSign}</span>
+                                  <StatusBadge type="vehicle-status" value={v.status} className="scale-90" />
+                                </div>
+                                {['dispatched', 'en_route', 'on_scene'].includes(v.status) && (
+                                  <button
+                                    disabled={recallingId === v.id}
+                                    onClick={() => handleRecall(v.id, v.callSign)}
+                                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-semibold hover:bg-red-500/20 transition-all disabled:opacity-50"
+                                  >
+                                    {recallingId === v.id
+                                      ? <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin" />
+                                      : <X className="w-2.5 h-2.5" />
+                                    }
+                                    Recall
+                                  </button>
+                                )}
+                              </div>
+                            ))}
                           </div>
-                          {['dispatched', 'en_route'].includes(assignedVehicle.status) && (
-                            <button
-                              disabled={recallingId === assignedVehicle.id}
-                              onClick={() => handleRecall(assignedVehicle.id, assignedVehicle.callSign)}
-                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-semibold hover:bg-red-500/20 transition-all disabled:opacity-50"
-                            >
-                              {recallingId === assignedVehicle.id
-                                ? <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin" />
-                                : <X className="w-2.5 h-2.5" />
-                              }
-                              Recall
-                            </button>
-                          )}
-                        </div>
-                      )}
+                        )
+                      })()}
                     </div>
                   </div>
 
@@ -238,14 +244,21 @@ export default function DispatchPage() {
                       )}
                     </div>
 
-                    {/* Assign unit button for unassigned incidents */}
-                    {isUnassigned && (
+                    {/* Assign / add units button */}
+                    {canAddUnits && (
                       <button
                         onClick={() => openDispatchModal(inc)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/25 text-amber-300 text-xs font-semibold hover:bg-amber-500/25 transition-all"
+                        className={cn(
+                          'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all',
+                          assignedVehicles.length === 0
+                            ? 'bg-amber-500/15 border border-amber-500/25 text-amber-300 hover:bg-amber-500/25'
+                            : 'bg-white/5 border border-white/10 text-slate-300 hover:bg-white/10'
+                        )}
                       >
-                        <Zap className="w-3 h-3" />
-                        Assign Unit
+                        {assignedVehicles.length === 0
+                          ? <><Zap className="w-3 h-3" /> Assign Units</>
+                          : <><Plus className="w-3 h-3" /> Add Unit</>
+                        }
                       </button>
                     )}
 

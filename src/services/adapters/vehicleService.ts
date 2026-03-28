@@ -182,6 +182,30 @@ export const vehicleService = {
   },
 
   /**
+   * Add an additional unit to an already-dispatched incident.
+   * Only updates vehicle status — does NOT overwrite the incident's primary assignment.
+   */
+  async addVehicleToIncident(vehicleId: string, incidentId: string): Promise<void> {
+    if (IS_MOCK) {
+      await sleep(400)
+      const vehicle = vehicleStore.getById(vehicleId)
+      if (!vehicle) throw new Error('Vehicle not found.')
+      vehicleStore.update(vehicleId, {
+        status: 'en_route',
+        assignedIncidentId: incidentId,
+        speed: Math.round(60 + Math.random() * 30),
+        heading: Math.round(Math.random() * 360),
+      })
+      return
+    }
+    const res = await authFetch(`/vehicles/${vehicleId}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status: 'ON_DUTY', incident_id: incidentId }),
+    })
+    if (!res.ok) throw new Error(await extractApiError(res, 'Failed to add unit to incident'))
+  },
+
+  /**
    * Dispatch a vehicle to an incident.
    * Live: PUT /vehicles/:id/status + PUT /incidents/:id/assign
    */
