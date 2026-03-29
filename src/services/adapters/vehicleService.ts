@@ -360,19 +360,16 @@ export const vehicleService = {
     let stopped = false
     const wsConnections = new Map<string, WebSocket>()
 
-    // Fetch incidents and cache destinations
-    async function refreshIncidents() {
-      if (!INCIDENT_BASE) return
+    // Fetch destination for a specific incident by ID (works for any status)
+    async function ensureDestination(incidentId: string) {
+      if (!INCIDENT_BASE || incidentDestinations.has(incidentId)) return
       try {
-        const res = await incidentFetch('/incidents/open')
+        const res = await incidentFetch(`/incidents/${incidentId}`)
         if (!res.ok) return
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const data: any[] = await res.json()
-        incidentDestinations.clear()
-        for (const inc of data) {
-          if (inc.id && inc.latitude != null && inc.longitude != null) {
-            incidentDestinations.set(inc.id, { lat: inc.latitude, lng: inc.longitude })
-          }
+        const inc: any = await res.json()
+        if (inc.latitude != null && inc.longitude != null) {
+          incidentDestinations.set(inc.id, { lat: inc.latitude, lng: inc.longitude })
         }
       } catch { /* ignore */ }
     }
@@ -431,13 +428,31 @@ export const vehicleService = {
       })
     }
 
-    // Poll backend (less frequently — every ~10 s)
+    // Poll backend for vehicle list + fetch any missing incident destinations
     let pollCount = 0
     async function pollBackend() {
       try {
         const res = await authFetch('/vehicles')
         if (!res.ok) return
         lastBackendVehicles = (await res.json()).map(normaliseVehicle)
+
+        // For every ON_DUTY vehicle, ensure we have its incident's coordinates.
+        // Fetch by individual ID so it works regardless of incident status
+        // (DISPATCHED incidents no longer appear in /incidents/open).
+        const activeIncidentIds = [
+          ...new Set(
+            lastBackendVehicles
+              .filter((v) => v.status === 'en_route' && v.assignedIncidentId)
+              .map((v) => v.assignedIncidentId!)
+          ),
+        ]
+        await Promise.all(activeIncidentIds.map(ensureDestination))
+
+        // Clean up destinations for incidents no longer active
+        const activeSet = new Set(activeIncidentIds)
+        for (const id of incidentDestinations.keys()) {
+          if (!activeSet.has(id)) incidentDestinations.delete(id)
+        }
 
         // WebSocket for each active vehicle (real GPS if driver has app)
         if (WS_BASE) {
@@ -448,7 +463,6 @@ export const vehicleService = {
                 try {
                   const loc = JSON.parse(evt.data as string)
                   if (loc.latitude != null && loc.longitude != null) {
-                    // Snap local position to real GPS reading
                     const existing = localState.get(v.id)
                     if (existing) {
                       localState.set(v.id, { ...existing, lat: loc.latitude, lng: loc.longitude })
@@ -468,7 +482,7 @@ export const vehicleService = {
     async function tick() {
       pollCount++
       if (pollCount === 1 || pollCount % 5 === 0) {
-        await Promise.all([pollBackend(), refreshIncidents()])
+        await pollBackend()
       }
       if (lastBackendVehicles.length > 0) {
         cb(applySimulation(lastBackendVehicles))
