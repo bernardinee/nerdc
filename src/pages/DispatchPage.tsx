@@ -88,6 +88,7 @@ export default function DispatchPage() {
     try {
       await incidentService.updateIncidentStatus(id, status)
       toast.success(`Incident marked "${status.replace('_', ' ')}"`)
+      await load()
     } catch {
       toast.error('Failed to update incident.')
     } finally {

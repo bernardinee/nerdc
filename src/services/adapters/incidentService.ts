@@ -307,6 +307,19 @@ export const incidentService = {
   },
 
   subscribeToIncidents(fn: (incidents: Incident[]) => void) {
-    return incidentStore.subscribe(fn)
+    if (IS_MOCK) return incidentStore.subscribe(fn)
+
+    // Live mode: poll every 15s for incident list changes
+    const poll = async () => {
+      try {
+        const res = await authFetch('/incidents/open')
+        if (res.ok) {
+          const data = await res.json()
+          fn(data.map(normaliseIncident))
+        }
+      } catch { /* ignore */ }
+    }
+    const timer = setInterval(poll, 15_000)
+    return () => clearInterval(timer)
   },
 }
