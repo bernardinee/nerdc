@@ -14,13 +14,14 @@ const INCIDENT_BASE  = (import.meta.env.VITE_INCIDENT_URL as string | undefined)
 const DISPATCH_BASE  = (import.meta.env.VITE_DISPATCH_URL as string | undefined)?.trim() ?? ''
 const IS_MOCK = INCIDENT_BASE === '' && DISPATCH_BASE === ''
 
-// ─── Session response-time collector ─────────────────────────────────────────
-// Collects response times (minutes) from incidents resolved in this browser
-// session, used as a client-side fallback when the analytics backend returns 0.
+// ─── Session counters ─────────────────────────────────────────────────────────
+// Client-side fallbacks for metrics the analytics backend may not track live.
 
 const sessionResponseTimes: number[] = []
+export let sessionResolvedCount = 0
 
 export function recordResolutionTime(createdAtIso: string) {
+  sessionResolvedCount++
   const minutes = Math.round((Date.now() - new Date(createdAtIso).getTime()) / 60000)
   if (minutes > 0) sessionResponseTimes.push(minutes)
 }
@@ -61,23 +62,30 @@ export const dispatchService = {
       return { openIncidents: open, dispatchedIncidents: dispatched, activeVehicles, resolvedIncidents: resolved, avgResponseTimeMinutes: avgResponseTime }
     }
 
-    // Live: combine open incidents + vehicles + analytics response-times
-    const [incidentRes, vehicleRes, rtRes] = await Promise.all([
+    // Live: combine open incidents + vehicles + analytics response-times + resolved incidents
+    const [incidentRes, vehicleRes, rtRes, resolvedRes] = await Promise.all([
       INCIDENT_BASE  ? apiFetch(INCIDENT_BASE,  '/incidents/open')            : Promise.resolve(null),
       DISPATCH_BASE  ? apiFetch(DISPATCH_BASE,  '/vehicles')                  : Promise.resolve(null),
       ANALYTICS_BASE ? apiFetch(ANALYTICS_BASE, '/analytics/response-times') : Promise.resolve(null),
+      // Try to get resolved incidents directly — endpoint may vary by backend
+      INCIDENT_BASE  ? apiFetch(INCIDENT_BASE,  '/incidents/resolved').catch(() => null) : Promise.resolve(null),
     ])
 
     const incidents: { status: string }[] = incidentRes?.ok ? await incidentRes.json() : []
     const vehicles:  { status: string }[] = vehicleRes?.ok  ? await vehicleRes.json()  : []
     const rt = rtRes?.ok ? await rtRes.json() : {}
+    const resolvedList: unknown[] = resolvedRes?.ok ? await resolvedRes.json() : []
 
-    const openIncidents       = incidents.length  // /incidents/open only returns non-resolved
+    const openIncidents       = incidents.length
     const dispatchedIncidents = incidents.filter((i) => ['DISPATCHED', 'IN_PROGRESS'].includes(i.status)).length
     const activeVehicles      = vehicles.filter((v) => v.status === 'ON_DUTY').length
-    const resolvedIncidents = rt.total_resolved ?? 0
-    const analyticsAvg      = Math.round((rt.average_seconds ?? 0) / 60)
-    // Use analytics avg if available, fall back to session-collected times
+
+    // Resolved count: prefer backend resolved endpoint → analytics total_resolved → session count
+    const backendResolved  = Array.isArray(resolvedList) && resolvedList.length > 0 ? resolvedList.length : 0
+    const analyticsResolved = rt.total_resolved ?? 0
+    const resolvedIncidents = Math.max(backendResolved, analyticsResolved, sessionResolvedCount)
+
+    const analyticsAvg = Math.round((rt.average_seconds ?? 0) / 60)
     const avgResponseTimeMinutes = analyticsAvg || sessionAvgResponseTime()
 
     return {

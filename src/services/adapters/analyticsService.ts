@@ -13,7 +13,7 @@ import { incidentStore, vehicleStore } from '../mocks/mockStore'
 import { sleep } from '@/lib/utils'
 import { subDays, format } from 'date-fns'
 import { apiFetch } from '../apiClient'
-import { sessionAvgResponseTime } from './dispatchService'
+import { sessionAvgResponseTime, sessionResolvedCount } from './dispatchService'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -190,10 +190,11 @@ export const analyticsService = {
       }
     })
 
+    const resolvedIncidents = Math.max(resolvedCount, sessionResolvedCount)
     return {
       totalIncidents,
-      resolvedIncidents:  resolvedCount,
-      resolutionRate:     totalIncidents > 0 ? Math.round((resolvedCount / totalIncidents) * 100) : 0,
+      resolvedIncidents,
+      resolutionRate:     totalIncidents > 0 ? Math.round((resolvedIncidents / totalIncidents) * 100) : 0,
       avgResponseTime,
       incidentsByType,
       incidentsByRegion,
