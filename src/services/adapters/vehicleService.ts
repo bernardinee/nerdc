@@ -300,18 +300,20 @@ export const vehicleService = {
 
     // Assign vehicle to incident (best-effort — incident service may auto-assign)
     if (INCIDENT_BASE) {
-      const vehicle = await this.getVehicleById(vehicleId)
-      const VTYPE_TO_BACKEND: Record<string, string> = {
-        ambulance: 'AMBULANCE', fire_truck: 'FIRE_TRUCK', police: 'POLICE',
-        rescue: 'AMBULANCE', command: 'POLICE',
-      }
-      await incidentFetch(`/incidents/${incidentId}/assign`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          assigned_unit_id:   vehicleId,
-          assigned_unit_type: VTYPE_TO_BACKEND[vehicle?.type ?? 'ambulance'] ?? 'AMBULANCE',
-        }),
-      })
+      try {
+        const vehicle = await this.getVehicleById(vehicleId)
+        const VTYPE_TO_BACKEND: Record<string, string> = {
+          ambulance: 'AMBULANCE', fire_truck: 'FIRE_TRUCK', police: 'POLICE',
+          rescue: 'AMBULANCE', command: 'POLICE',
+        }
+        await incidentFetch(`/incidents/${incidentId}/assign`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            assigned_unit_id:   vehicleId,
+            assigned_unit_type: VTYPE_TO_BACKEND[vehicle?.type ?? 'ambulance'] ?? 'AMBULANCE',
+          }),
+        })
+      } catch { /* best-effort — never abort the dispatch if assign fails */ }
     }
   },
 

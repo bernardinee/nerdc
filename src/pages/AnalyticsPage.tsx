@@ -56,9 +56,15 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     fetchData()
-    // Auto-refresh every 60s so counts stay current after incident status changes
-    const timer = setInterval(() => fetchData(), 60_000)
-    return () => clearInterval(timer)
+    // Auto-refresh every 30s so counts stay current after incident status changes
+    const timer = setInterval(() => fetchData(), 30_000)
+    // Re-fetch when the user switches back to this browser tab
+    function onVisible() { if (!document.hidden) fetchData() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [fetchData])
 
   return (
@@ -206,43 +212,47 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Vehicle table */}
-      {!loading && data?.vehicleUtilization && (
+      {!loading && (
         <GlassCard className="p-5">
-          <SectionHeader title="Unit Performance" className="mb-4" />
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/6">
-                  {['Call Sign', 'Hours Active', 'Incidents Handled', 'Utilization'].map((h) => (
-                    <th key={h} className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
-                {data.vehicleUtilization.map((v) => (
-                  <tr key={v.vehicleId} className="hover:bg-white/[0.02] transition-colors">
-                    <td className="px-3 py-3 font-semibold text-white">{v.callSign}</td>
-                    <td className="px-3 py-3 text-slate-300">{v.hoursActive}h</td>
-                    <td className="px-3 py-3 text-slate-300">{v.incidentsHandled}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="flex-1 h-1.5 bg-white/8 rounded-full overflow-hidden max-w-[80px]">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${v.utilizationPct}%`,
-                              background: v.utilizationPct > 70 ? '#22c55e' : v.utilizationPct > 40 ? '#00b8f5' : '#f59e0b',
-                            }}
-                          />
-                        </div>
-                        <span className="text-xs text-slate-300 font-semibold">{v.utilizationPct}%</span>
-                      </div>
-                    </td>
+          <SectionHeader title="Unit Performance" subtitle="Only dispatched units appear here" className="mb-4" />
+          {data?.vehicleUtilization.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-white/6">
+                    {['Call Sign', 'Hours Active', 'Incidents Handled', 'Utilization'].map((h) => (
+                      <th key={h} className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {data.vehicleUtilization.map((v) => (
+                    <tr key={v.vehicleId} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="px-3 py-3 font-semibold text-white">{v.callSign}</td>
+                      <td className="px-3 py-3 text-slate-300">{v.hoursActive}h</td>
+                      <td className="px-3 py-3 text-slate-300">{v.incidentsHandled}</td>
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex-1 h-1.5 bg-white/8 rounded-full overflow-hidden max-w-[80px]">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${v.utilizationPct}%`,
+                                background: v.utilizationPct > 70 ? '#22c55e' : v.utilizationPct > 40 ? '#00b8f5' : '#f59e0b',
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs text-slate-300 font-semibold">{v.utilizationPct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState icon={BarChart3} title="No dispatched units yet" description="Dispatch units to incidents and they will appear here." />
+          )}
         </GlassCard>
       )}
     </div>
