@@ -186,29 +186,39 @@ def login():
     return token
 
 
-def register_vehicle(token, reg, vtype, station, driver, lat, lng):
-    res = requests.post(
-        f"{DISPATCH_URL}/vehicles/register",
-        json={
-            "registration_number": reg,
-            "vehicle_type":        vtype,
-            "station_id":          station,
-            "driver_name":         driver,
-            "latitude":            lat,
-            "longitude":           lng,
-        },
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
-    )
-    if res.status_code in (200, 201):
-        print(f"  [OK]   {reg:22s}  {vtype:10s}  {station}")
-        return True
-    elif res.status_code in (400, 409) and "already" in res.text.lower():
-        print(f"  [SKIP] {reg:22s}  already exists")
-        return True
-    else:
-        print(f"  [FAIL] {reg:22s}  HTTP {res.status_code} -- {res.text[:120]}")
-        return False
+def register_vehicle(token, reg, vtype, station, driver, lat, lng, retries=4):
+    for attempt in range(1, retries + 1):
+        try:
+            res = requests.post(
+                f"{DISPATCH_URL}/vehicles/register",
+                json={
+                    "registration_number": reg,
+                    "vehicle_type":        vtype,
+                    "station_id":          station,
+                    "driver_name":         driver,
+                    "latitude":            lat,
+                    "longitude":           lng,
+                },
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            if res.status_code in (200, 201):
+                print(f"  [OK]   {reg:22s}  {vtype:10s}  {station}")
+                return True
+            elif res.status_code in (400, 409) and "already" in res.text.lower():
+                print(f"  [SKIP] {reg:22s}  already exists")
+                return True
+            else:
+                print(f"  [FAIL] {reg:22s}  HTTP {res.status_code} -- {res.text[:120]}")
+                return False
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            if attempt < retries:
+                wait = attempt * 5
+                print(f"  [RETRY {attempt}/{retries}] {reg} — timeout, waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"  [FAIL] {reg:22s}  timeout after {retries} attempts")
+                return False
 
 
 def main():

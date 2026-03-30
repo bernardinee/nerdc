@@ -376,7 +376,7 @@ def login():
     return token
 
 
-def create_incident(token, name, phone, itype, severity, lat, lng, address, region, notes):
+def create_incident(token, name, phone, itype, severity, lat, lng, address, region, notes, retries=4):
     payload = {
         "citizen_name":  name,
         "citizen_phone": phone,
@@ -388,20 +388,30 @@ def create_incident(token, name, phone, itype, severity, lat, lng, address, regi
         "region":        region,
         "notes":         notes,
     }
-    res = requests.post(
-        f"{INCIDENT_URL}/incidents",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
-    )
     short_desc = f"{itype.upper():14s}  {region}"
-    if res.status_code in (200, 201):
-        inc_id = res.json().get("id", "")
-        print(f"  [OK]   {str(inc_id):36s}  {short_desc}")
-        return inc_id
-    else:
-        print(f"  [FAIL] {short_desc}  HTTP {res.status_code} -- {res.text[:120]}")
-        return None
+    for attempt in range(1, retries + 1):
+        try:
+            res = requests.post(
+                f"{INCIDENT_URL}/incidents",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            if res.status_code in (200, 201):
+                inc_id = res.json().get("id", "")
+                print(f"  [OK]   {str(inc_id):36s}  {short_desc}")
+                return inc_id
+            else:
+                print(f"  [FAIL] {short_desc}  HTTP {res.status_code} -- {res.text[:120]}")
+                return None
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            if attempt < retries:
+                wait = attempt * 5
+                print(f"  [RETRY {attempt}/{retries}] {short_desc} — timeout, waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"  [FAIL] {short_desc}  timeout after {retries} attempts")
+                return None
 
 
 def main():

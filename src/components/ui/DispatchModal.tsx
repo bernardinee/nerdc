@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { X, AlertTriangle, Truck, Zap, Battery, MapPin, CheckCircle2, ChevronRight, Plus, Info } from 'lucide-react'
 import type { Incident, Vehicle, VehicleType } from '@/types'
-import { vehicleService } from '@/services/adapters/vehicleService'
+import { vehicleService, recordVehicleDispatch } from '@/services/adapters/vehicleService'
 import { StatusBadge } from './StatusBadge'
 import { cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
@@ -130,6 +130,7 @@ export function DispatchModal({
           await vehicleService.addVehicleToIncident(v.id, selectedIncident.id)
         }
         successCount++
+        recordVehicleDispatch(v.id, v.callSign, v.type, v.stationId)
       } catch (err) {
         errors.push(`${v.callSign}: ${err instanceof Error ? err.message : 'failed'}`)
       }

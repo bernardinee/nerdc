@@ -138,7 +138,7 @@ interface DispatchRecord {
   lastDispatch: string
 }
 
-function recordDispatch(vehicleId: string, callSign: string, vehicleType: string, stationId: string) {
+export function recordVehicleDispatch(vehicleId: string, callSign: string, vehicleType: string, stationId: string) {
   try {
     const all: Record<string, DispatchRecord> = JSON.parse(localStorage.getItem(DISPATCH_TRACK_KEY) ?? '{}')
     const prev = all[vehicleId]
@@ -242,9 +242,6 @@ export const vehicleService = {
     })
     if (!res.ok) throw new Error(await extractApiError(res, 'Failed to add unit to incident'))
     frontendDispatchMap.set(vehicleId, incidentId)
-    // Track dispatch for analytics
-    const veh = await this.getVehicleById(vehicleId)
-    if (veh) recordDispatch(vehicleId, veh.callSign, veh.type, veh.stationId)
   },
 
   /**
@@ -300,9 +297,6 @@ export const vehicleService = {
 
     // Register in frontend map immediately so animation starts without waiting for backend echo
     frontendDispatchMap.set(vehicleId, incidentId)
-    // Track dispatch for analytics
-    const veh = await this.getVehicleById(vehicleId)
-    if (veh) recordDispatch(vehicleId, veh.callSign, veh.type, veh.stationId)
 
     // Assign vehicle to incident (best-effort — incident service may auto-assign)
     if (INCIDENT_BASE) {
