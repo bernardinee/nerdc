@@ -25,22 +25,32 @@ function clearSession() {
   localStorage.removeItem('nerdc_user')
 }
 
+// Singleton refresh promise — prevents multiple concurrent 401 handlers from each
+// attempting a refresh and racing: only one refresh runs; the rest wait on the same promise.
+let refreshPromise: Promise<boolean> | null = null
+
 async function refreshTokens(): Promise<boolean> {
+  if (refreshPromise) return refreshPromise
   const refresh = getRefresh()
   if (!refresh || !AUTH_BASE) return false
-  try {
-    const res = await fetch(`${AUTH_BASE}/auth/refresh-token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refresh }),
-    })
-    if (!res.ok) return false
-    const data = await res.json()
-    saveToken(data.access_token, data.refresh_token)
-    return true
-  } catch {
-    return false
-  }
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${AUTH_BASE}/auth/refresh-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh }),
+      })
+      if (!res.ok) return false
+      const data = await res.json()
+      saveToken(data.access_token, data.refresh_token)
+      return true
+    } catch {
+      return false
+    } finally {
+      refreshPromise = null
+    }
+  })()
+  return refreshPromise
 }
 
 export async function apiFetch(baseUrl: string, path: string, init: RequestInit = {}): Promise<Response> {
