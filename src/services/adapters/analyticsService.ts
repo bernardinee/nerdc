@@ -211,26 +211,40 @@ export const analyticsService = {
       .map(([region, count]) => ({ region, count }))
       .sort((a, b) => b.count - a.count)
 
-    // Resource utilization — built from client-side dispatch tracking (localStorage).
-    // Only vehicles that have actually been dispatched appear here.
-    // Falls back to analytics backend data if it ever starts returning results.
+    // Resource utilization — merges two sources:
+    //   1. Open incidents: each incident with an assigned_unit_id counts as a dispatch.
+    //      This catches backend auto-dispatch which bypasses the frontend modal entirely.
+    //   2. localStorage tracking: manual dispatches made through the frontend modal.
     const dispatchTracking = loadVehicleDispatches()
-    const trackedIds = Object.keys(dispatchTracking)
 
-    const vehicleUtilization = trackedIds.length > 0
-      ? trackedIds.map((id) => {
+    // Count assignments from open incidents (backend auto-dispatch source)
+    const incidentAssignments: Record<string, number> = {}
+    for (const inc of openList) {
+      const unitId = inc.assigned_unit_id
+      if (unitId) incidentAssignments[unitId] = (incidentAssignments[unitId] ?? 0) + 1
+    }
+
+    // Union of both sources
+    const allTrackedIds = new Set([
+      ...Object.keys(dispatchTracking),
+      ...Object.keys(incidentAssignments),
+    ])
+
+    const vehicleUtilization = allTrackedIds.size > 0
+      ? Array.from(allTrackedIds).map((id) => {
           const d = dispatchTracking[id]
-          // Try to enrich with live vehicle data (call sign, station)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const live: any = vehicleList.find((v: any) => v.id === id)
+          // Use whichever source has a higher count (localStorage persists resolved ones)
+          const count = Math.max(d?.count ?? 0, incidentAssignments[id] ?? 0)
           return {
             vehicleId:        id,
-            callSign:         live?.registration_number ?? d.callSign,
-            stationId:        live?.station_id ?? d.stationId,
-            type:             (VTYPE_FROM_BACKEND[live?.vehicle_type ?? ''] ?? d.vehicleType ?? 'ambulance') as VehicleType,
-            hoursActive:      Math.round(d.count * 1.5),
-            incidentsHandled: d.count,
-            utilizationPct:   Math.min(100, d.count * 20),
+            callSign:         live?.registration_number ?? d?.callSign ?? id,
+            stationId:        live?.station_id ?? d?.stationId ?? '',
+            type:             (VTYPE_FROM_BACKEND[live?.vehicle_type ?? ''] ?? d?.vehicleType ?? 'ambulance') as VehicleType,
+            hoursActive:      Math.round(count * 1.5),
+            incidentsHandled: count,
+            utilizationPct:   Math.min(100, count * 20),
           }
         }).sort((a, b) => b.incidentsHandled - a.incidentsHandled)
       : utilData.map((u) => ({
