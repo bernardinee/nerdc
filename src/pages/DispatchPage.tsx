@@ -57,6 +57,8 @@ export default function DispatchPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [modalIncident, setModalIncident] = useState<Incident | null>(null)
 
+  // Full reload — fetches vehicles too. Only use on mount and after dispatching
+  // new units (where we genuinely need the updated vehicle list).
   async function load() {
     const [s, i, v] = await Promise.all([
       dispatchService.getDispatchSummary(),
@@ -67,6 +69,17 @@ export default function DispatchPage() {
     setIncidents(i)
     setVehicles(v)
     setLoading(false)
+  }
+
+  // Lightweight refresh — incidents + summary only. Does NOT overwrite vehicle
+  // state so the animated status (on_scene etc.) from the subscription is preserved.
+  async function refreshIncidents() {
+    const [s, i] = await Promise.all([
+      dispatchService.getDispatchSummary(),
+      incidentService.getIncidents(),
+    ])
+    setSummary(s)
+    setIncidents(i)
   }
 
   // Track vehicles already processed for on_scene so we only fire once per arrival
@@ -89,7 +102,7 @@ export default function DispatchPage() {
           // Vehicle just arrived — transition incident to in_progress
           arrivedVehicles.current.add(v.id)
           incidentService.updateIncidentStatus(v.assignedIncidentId, 'in_progress')
-            .then(() => load())
+            .then(() => refreshIncidents())
             .catch(() => { /* ignore if already in_progress or resolved */ })
         } else if (v.status !== 'on_scene') {
           // Vehicle left the scene — clear so it can trigger again if re-dispatched
@@ -131,7 +144,7 @@ export default function DispatchPage() {
       }
 
       toast.success(`Incident marked "${status.replace('_', ' ')}"`)
-      await load()
+      await refreshIncidents()
     } catch {
       toast.error('Failed to update incident.')
     } finally {
@@ -144,7 +157,7 @@ export default function DispatchPage() {
     try {
       await vehicleService.recallVehicle(vehicleId)
       toast.success(`${vehicleCallSign} recalled to base`)
-      await load()
+      await refreshIncidents()
     } catch {
       toast.error('Failed to recall unit.')
     } finally {
