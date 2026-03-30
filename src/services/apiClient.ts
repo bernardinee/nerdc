@@ -69,11 +69,18 @@ export async function apiFetch(baseUrl: string, path: string, init: RequestInit 
   const res = await makeReq(token)
 
   if (res.status === 401) {
+    // Only attempt a redirect if there was an active session (token was present).
+    // When unauthenticated requests return 401 (e.g. background pollers firing on the
+    // login page before the user has signed in), we must NOT redirect — that creates an
+    // infinite hard-reload loop on /login.
+    const hadToken = !!token
     const refreshed = await refreshTokens()
     if (!refreshed) {
       clearSession()
-      // Redirect to login if we have a window
-      if (typeof window !== 'undefined') window.location.href = '/login'
+      const onLoginPage = typeof window !== 'undefined' && window.location.pathname.includes('/login')
+      if (hadToken && !onLoginPage) {
+        window.location.href = '/login'
+      }
       throw new Error('Session expired. Please sign in again.')
     }
     return makeReq(getToken())
