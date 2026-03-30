@@ -19,6 +19,7 @@ import { sessionAvgResponseTime, sessionResolvedCount } from './dispatchService'
 
 const ANALYTICS_BASE = (import.meta.env.VITE_ANALYTICS_URL as string | undefined)?.trim() ?? ''
 const INCIDENT_BASE   = (import.meta.env.VITE_INCIDENT_URL  as string | undefined)?.trim() ?? ''
+const DISPATCH_BASE   = (import.meta.env.VITE_DISPATCH_URL  as string | undefined)?.trim() ?? ''
 const IS_MOCK_ANALYTICS = ANALYTICS_BASE === ''
 
 // ─── Live fetch helpers ───────────────────────────────────────────────────────
@@ -29,6 +30,32 @@ function authFetch(path: string) {
 
 function incidentFetch(path: string) {
   return apiFetch(INCIDENT_BASE, path)
+}
+
+function dispatchFetch(path: string) {
+  return apiFetch(DISPATCH_BASE, path)
+}
+
+// ─── Backend → frontend type mapping ─────────────────────────────────────────
+
+const TYPE_FROM_BACKEND: Record<string, string> = {
+  MEDICAL: 'medical', FIRE: 'fire', CRIME: 'crime', ACCIDENT: 'accident', OTHER: 'other',
+}
+
+const VTYPE_FROM_BACKEND: Record<string, string> = {
+  AMBULANCE: 'ambulance', FIRE_TRUCK: 'fire_truck', POLICE: 'police',
+}
+
+// ─── localStorage extras (region/severity stored by incidentService) ──────────
+
+function loadExtrasRegion(): Record<string, string> {
+  try {
+    const all = JSON.parse(localStorage.getItem('nerdc_incident_extras') ?? '{}') as
+      Record<string, { region?: string }>
+    const out: Record<string, string> = {}
+    for (const [id, v] of Object.entries(all)) if (v.region) out[id] = v.region
+    return out
+  } catch { return {} }
 }
 
 // ─── Public service ───────────────────────────────────────────────────────────
@@ -123,39 +150,35 @@ export const analyticsService = {
     }
 
     // Live mode
-    const [rtRes, regionRes, utilRes, openRes] = await Promise.all([
+    const [rtRes, utilRes, openRes, vehicleRes] = await Promise.all([
       authFetch('/analytics/response-times'),
-      authFetch('/analytics/incidents-by-region'),
       authFetch('/analytics/resource-utilization'),
       incidentFetch('/incidents/open'),
+      DISPATCH_BASE ? dispatchFetch('/vehicles') : Promise.resolve(null),
     ])
 
-    const rt         = rtRes.ok   ? await rtRes.json()     : {}
-    const regionData: { region: string; incident_type: string; count: number }[]
-                     = regionRes.ok ? await regionRes.json() : []
+    const rt       = rtRes.ok  ? await rtRes.json()  : {}
     const utilData: { unit_type: string; unit_id: string; total_dispatches: number }[]
-                     = utilRes.ok  ? await utilRes.json()  : []
-    const openList: { id: string; type: string; status: string }[]
-                     = openRes.ok  ? await openRes.json()  : []
+                   = utilRes.ok ? await utilRes.json() : []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const openList: any[] = openRes.ok ? await openRes.json() : []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vehicleList: any[] = vehicleRes?.ok ? await vehicleRes.json() : []
 
-    // Total incidents: open/active (from incident service) + resolved (from analytics)
-    const resolvedCount = rt.total_resolved ?? 0
-    const openCount     = Array.isArray(openList) ? openList.length : 0
+    // Total incidents: open (from incident service) + resolved (from analytics)
+    const resolvedCount  = rt.total_resolved ?? 0
+    const openCount      = Array.isArray(openList) ? openList.length : 0
     const totalIncidents = openCount + resolvedCount
 
     // Response times — use analytics avg if available, fall back to session data
     const avgResponseTime = Math.round((rt.average_seconds ?? 0) / 60) || sessionAvgResponseTime()
 
-    // Incidents by type — built from the real incident list (accurate)
+    // Incidents by type — backend sends `incident_type` (uppercase), map to frontend names
     const typeCounts: Record<string, number> = {}
     for (const inc of openList) {
-      const t = inc.type?.toLowerCase() ?? 'other'
+      const raw = inc.incident_type ?? inc.type ?? 'OTHER'
+      const t = TYPE_FROM_BACKEND[raw.toUpperCase()] ?? raw.toLowerCase()
       typeCounts[t] = (typeCounts[t] ?? 0) + 1
-    }
-    // Supplement with region data for any resolved incidents
-    for (const r of regionData) {
-      const type = r.incident_type?.toLowerCase() ?? 'other'
-      typeCounts[type] = (typeCounts[type] ?? 0) + r.count
     }
     const incidentsByType = Object.entries(typeCounts).map(([type, count]) => ({
       type: type as IncidentType,
@@ -163,21 +186,38 @@ export const analyticsService = {
       percentage: Math.round((count / Math.max(totalIncidents, 1)) * 100),
     }))
 
-    // Incidents by region (from analytics — only populated when region is stored)
+    // Incidents by region — backend drops region field, so read from localStorage extras
+    const regionExtras = loadExtrasRegion()
     const regionCounts: Record<string, number> = {}
-    for (const r of regionData) regionCounts[r.region] = (regionCounts[r.region] ?? 0) + r.count
-    const incidentsByRegion = Object.entries(regionCounts).map(([region, count]) => ({ region, count }))
+    for (const inc of openList) {
+      const region = regionExtras[inc.id] ?? inc.region ?? ''
+      if (region) regionCounts[region] = (regionCounts[region] ?? 0) + 1
+    }
+    const incidentsByRegion = Object.entries(regionCounts)
+      .map(([region, count]) => ({ region, count }))
+      .sort((a, b) => b.count - a.count)
 
-    // Resource utilization
-    const vehicleUtilization = utilData.map((u) => ({
-      vehicleId:        u.unit_id,
-      callSign:         `${u.unit_type}-${u.unit_id.slice(-4).toUpperCase()}`,
-      stationId:        '',
-      type:             (u.unit_type?.toLowerCase().replace(' ', '_') ?? 'ambulance') as VehicleType,
-      hoursActive:      Math.round(u.total_dispatches * 1.5),
-      incidentsHandled: u.total_dispatches,
-      utilizationPct:   Math.min(100, Math.round(u.total_dispatches * 10)),
-    }))
+    // Resource utilization — analytics endpoint is empty while backend has no resolved data;
+    // fall back to the live vehicle list so the table is always populated
+    const vehicleUtilization = utilData.length > 0
+      ? utilData.map((u) => ({
+          vehicleId:        u.unit_id,
+          callSign:         `${u.unit_type}-${u.unit_id.slice(-4).toUpperCase()}`,
+          stationId:        '',
+          type:             (VTYPE_FROM_BACKEND[u.unit_type] ?? 'ambulance') as VehicleType,
+          hoursActive:      Math.round(u.total_dispatches * 1.5),
+          incidentsHandled: u.total_dispatches,
+          utilizationPct:   Math.min(100, Math.round(u.total_dispatches * 10)),
+        }))
+      : vehicleList.map((v) => ({
+          vehicleId:        v.id,
+          callSign:         v.registration_number ?? v.id,
+          stationId:        v.station_id ?? '',
+          type:             (VTYPE_FROM_BACKEND[v.vehicle_type] ?? 'ambulance') as VehicleType,
+          hoursActive:      0,
+          incidentsHandled: 0,
+          utilizationPct:   v.status === 'ON_DUTY' ? 75 : 0,
+        }))
 
     // Response time trend across 7 days
     const responseTimeTrend = Array.from({ length: 7 }, (_, i) => {
