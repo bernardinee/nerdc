@@ -41,9 +41,10 @@ export function Sidebar() {
       {/* Toggle */}
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="absolute -right-3 top-8 z-10 w-6 h-6 rounded-full bg-[#1c2128] border border-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-colors shadow-glass"
+        className="absolute -right-3.5 top-8 z-10 w-7 h-7 rounded-full bg-cyan-500 hover:bg-cyan-400 border-2 border-[#0d1117] flex items-center justify-center text-white transition-all shadow-lg hover:scale-110"
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
       >
-        {collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
+        {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
       </button>
 
       {/* Logo */}
