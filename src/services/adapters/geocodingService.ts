@@ -111,34 +111,39 @@ export async function reverseGeocode(lat: number, lng: number): Promise<ReverseG
     `https://nominatim.openstreetmap.org/reverse` +
     `?format=json&lat=${lat}&lon=${lng}&addressdetails=1&accept-language=en`
 
-  const res = await fetch(url)
+  const MAX_ATTEMPTS = 3
+  let lastError: unknown
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise<void>((r) => setTimeout(r, 1000 * attempt))
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`Geocoding failed: ${res.statusText}`)
+      const data: NominatimResponse = await res.json()
+      if (data.error) throw new Error(data.error)
 
-  if (!res.ok) throw new Error(`Geocoding failed: ${res.statusText}`)
+      const a = data.address ?? {}
+      const parts: string[] = []
+      if (a.house_number) parts.push(a.house_number)
+      if (a.road)              parts.push(a.road)
+      else if (a.suburb)       parts.push(a.suburb)
+      else if (a.neighbourhood) parts.push(a.neighbourhood)
+      else if (a.village)      parts.push(a.village)
 
-  const data: NominatimResponse = await res.json()
+      const city = a.city ?? a.town ?? a.county ?? ''
+      if (city && !parts.includes(city)) parts.push(city)
 
-  if (data.error) throw new Error(data.error)
+      const address = parts.join(', ') || data.display_name?.split(',').slice(0, 2).join(',').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`
 
-  const a = data.address ?? {}
-
-
-  const parts: string[] = []
-  if (a.house_number) parts.push(a.house_number)
-  if (a.road)         parts.push(a.road)
-  else if (a.suburb)  parts.push(a.suburb)
-  else if (a.neighbourhood) parts.push(a.neighbourhood)
-  else if (a.village) parts.push(a.village)
-
-  const city = a.city ?? a.town ?? a.county ?? ''
-  if (city && !parts.includes(city)) parts.push(city)
-
-  const address = parts.join(', ') || data.display_name?.split(',').slice(0, 2).join(',').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-
-  return {
-    address,
-    displayName: data.display_name ?? address,
-    region: normaliseRegion(a.state),
-    city,
-    country: a.country ?? 'Ghana',
+      return {
+        address,
+        displayName: data.display_name ?? address,
+        region: normaliseRegion(a.state),
+        city,
+        country: a.country ?? 'Ghana',
+      }
+    } catch (err) {
+      lastError = err
+    }
   }
+  throw lastError
 }
