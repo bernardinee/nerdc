@@ -9,7 +9,7 @@ import { GlassCard } from '@/components/ui/GlassCard'
 import { MapPanel } from '@/components/ui/MapPanel'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { incidentService } from '@/services/adapters/incidentService'
-import { reverseGeocode } from '@/services/adapters/geocodingService'
+import { reverseGeocode, deriveLocationFromCoords } from '@/services/adapters/geocodingService'
 import { useAuthStore } from '@/store/useAuthStore'
 import type { IncidentType, IncidentSeverity } from '@/types'
 import { cn } from '@/lib/utils'
@@ -106,11 +106,14 @@ export default function IncidentFormPage() {
 
       setLocationConfirmed(true)
     } catch {
-      // Geocoding failed (offline, rate-limited, etc.) — coordinates still set,
-      // address field stays editable, user can type it manually
-      toast.error('Could not fetch address for this location. You can enter it manually.', {
-        duration: 3000,
-      })
+      // Nominatim failed — fall back to instant offline bounding-box derivation
+      const derived = deriveLocationFromCoords(clickedLat, clickedLng)
+      setValue('address', derived.address, { shouldValidate: true })
+      const match = GHANA_REGIONS.find(
+        (r) => r.toLowerCase() === derived.region.toLowerCase()
+      )
+      setValue('region', match ?? derived.region, { shouldValidate: true })
+      setLocationConfirmed(true)
     } finally {
       setGeocoding(false)
     }
