@@ -17,7 +17,7 @@ import type { CreateIncidentPayload, Incident, IncidentSeverity, IncidentStatus,
 import { incidentStore, vehicleStore, messageStore } from '../mocks/mockStore'
 import { sleep, generateId } from '@/lib/utils'
 import { apiFetch, extractApiError } from '../apiClient'
-import { reverseGeocode } from './geocodingService'
+import { reverseGeocode, deriveLocationFromCoords } from './geocodingService'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -161,8 +161,19 @@ function backfillMissingLocations(incidents: Incident[]): void {
   const missing = incidents.filter(
     (inc) => !inc.location.address || !inc.location.region
   )
-  if (missing.length === 0 || _geocodingRunning) return
+  if (missing.length === 0) return
 
+  // ── Step 1: instant offline derivation ───────────────────────────────────
+  // Apply Ghana bounding-box region + nearest capital placeholder immediately.
+  // No network needed — dispatch queue shows something useful straight away.
+  for (const inc of missing) {
+    storeExtras(inc.id, deriveLocationFromCoords(inc.location.lat, inc.location.lng))
+  }
+  window.dispatchEvent(new CustomEvent('nerdc:locations-updated'))
+
+  // ── Step 2: background Nominatim for accurate street addresses ────────────
+  // Skipped if a geocoding pass is already in progress.
+  if (_geocodingRunning) return
   _geocodingRunning = true
   ;(async () => {
     for (let i = 0; i < missing.length; i++) {
@@ -178,13 +189,12 @@ function backfillMissingLocations(incidents: Incident[]): void {
         storeExtras(inc.id, cached)
       } catch { /* ignore transient errors */ }
 
-      // 350 ms stagger — stays within Nominatim's 1 req/s policy
+      // 1.1 s stagger — safe margin inside Nominatim's 1 req/s policy
       if (i < missing.length - 1) {
-        await new Promise<void>((r) => setTimeout(r, 350))
+        await new Promise<void>((r) => setTimeout(r, 1100))
       }
     }
     _geocodingRunning = false
-    // Signal pages to re-fetch so locations appear without waiting for auto-refresh
     window.dispatchEvent(new CustomEvent('nerdc:locations-updated'))
   })()
 }
