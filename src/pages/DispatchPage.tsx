@@ -56,6 +56,7 @@ export default function DispatchPage() {
   // Modal state
   const [modalOpen, setModalOpen] = useState(false)
   const [modalIncident, setModalIncident] = useState<Incident | null>(null)
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
 
   // Full reload — fetches vehicles too. Only use on mount and after dispatching
   // new units (where we genuinely need the updated vehicle list).
@@ -375,30 +376,36 @@ export default function DispatchPage() {
 
                     {/* Manual status dropdown for other transitions */}
                     {transitions.length > 0 && (
-                      <div className="relative group">
+                      <div className="relative">
                         <button
                           disabled={updatingId === inc.id}
+                          onClick={() => setOpenMenuId((id) => id === inc.id ? null : inc.id)}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/15 border border-cyan-500/25 text-cyan-300 text-xs font-medium hover:bg-cyan-500/25 transition-all disabled:opacity-50"
                         >
                           {updatingId === inc.id && (
                             <span className="w-3 h-3 rounded-full border border-current border-t-transparent animate-spin" />
                           )}
                           Update
-                          <ChevronDown className="w-3 h-3" />
+                          <ChevronDown className={cn('w-3 h-3 transition-transform', openMenuId === inc.id && 'rotate-180')} />
                         </button>
-                        <div className="absolute right-0 top-full mt-1 z-20 hidden group-hover:block">
-                          <div className="glass rounded-xl shadow-glass-lg border border-white/10 overflow-hidden min-w-[150px]">
-                            {transitions.map((next) => (
-                              <button
-                                key={next}
-                                onClick={() => updateStatus(inc.id, next)}
-                                className="block w-full text-left px-3 py-2.5 text-xs text-slate-300 hover:bg-white/8 transition-colors capitalize"
-                              >
-                                → {next.replace('_', ' ')}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                        {openMenuId === inc.id && (
+                          <>
+                            <div className="fixed inset-0 z-10" onClick={() => setOpenMenuId(null)} />
+                            <div className="absolute right-0 top-full mt-1 z-20">
+                              <div className="glass rounded-xl shadow-glass-lg border border-white/10 overflow-hidden min-w-[150px]">
+                                {transitions.map((next) => (
+                                  <button
+                                    key={next}
+                                    onClick={() => { setOpenMenuId(null); updateStatus(inc.id, next) }}
+                                    className="block w-full text-left px-3 py-2.5 text-xs text-slate-300 hover:bg-white/8 transition-colors capitalize"
+                                  >
+                                    → {next.replace('_', ' ')}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
