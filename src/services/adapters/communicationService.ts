@@ -73,6 +73,7 @@ export const communicationService = {
     content: string
     channel: RadioChannel
     senderName: string
+    vehicles?: Vehicle[]
   }): Promise<DispatchMessage> {
     await sleep(120)
 
@@ -91,16 +92,20 @@ export const communicationService = {
     }
     messageStore.add(msg)
 
+    // Use live vehicles when provided, fall back to mock store
+    const allVehicles = params.vehicles?.length ? params.vehicles : vehicleStore.getAll()
+
     // Simulate vehicle acknowledgments
     if (params.toId === 'ALL') {
-      // A few random vehicles respond to broadcasts
-      const vehicles = vehicleStore.getAll().filter((v) => v.status !== 'offline')
-      const responders = vehicles.sort(() => Math.random() - 0.5).slice(0, 3)
+      const responders = allVehicles
+        .filter((v) => v.status !== 'offline')
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 3)
       responders.forEach((v, i) => {
         simulateVehicleResponse(v, params.channel, 2000 + i * 1200)
       })
     } else {
-      const vehicle = vehicleStore.getById(params.toId)
+      const vehicle = allVehicles.find((v) => v.id === params.toId)
       if (vehicle && vehicle.status !== 'offline') {
         simulateVehicleResponse(vehicle, params.channel, 1800 + Math.random() * 2000)
       }
@@ -110,13 +115,18 @@ export const communicationService = {
   },
 
   /** Inject random inbound status chatter to make the radio feel live */
-  startRadioChatter(intervalMs = 45000): () => void {
+  startRadioChatter(intervalMs = 45000, liveVehicles?: Vehicle[]): () => void {
     let chatterIndex = 0
     const timer = setInterval(() => {
+      // Prefer live vehicles; fall back to mock store vehicles
+      const pool = liveVehicles?.length ? liveVehicles : vehicleStore.getAll()
+      const online = pool.filter((v) => v.status !== 'offline')
+      if (online.length === 0) return
+
+      // Cycle through STATUS_CHATTER text but pick a real vehicle from the pool
       const item = STATUS_CHATTER[chatterIndex % STATUS_CHATTER.length]
       chatterIndex++
-      const vehicle = vehicleStore.getById(item.vehicleId)
-      if (!vehicle || vehicle.status === 'offline') return
+      const vehicle = online[Math.floor(Math.random() * online.length)]
       const msg: DispatchMessage = {
         id: `MSG-${generateId()}`,
         fromId: vehicle.id,

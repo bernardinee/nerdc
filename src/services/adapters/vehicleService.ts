@@ -59,7 +59,7 @@ function normaliseVehicle(data: any): Vehicle {
     speed:              0,
     heading:            0,
     fuelLevel:          85,
-    channel:            'command' as const,
+    channel:            (({ AMBULANCE: 'alpha', RESCUE: 'alpha', FIRE_TRUCK: 'bravo', POLICE: 'charlie' } as Record<string, string>)[data.vehicle_type ?? ''] ?? 'command') as import('@/types').RadioChannel,
     assignedIncidentId: data.current_incident_id ?? undefined,
     lastUpdated:        data.last_updated ?? new Date().toISOString(),
   }

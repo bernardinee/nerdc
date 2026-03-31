@@ -53,8 +53,8 @@ export function CommunicationPanel({ vehicles, selectedVehicle, className }: Pro
       }
       prevCountRef.current = newCount
     })
-    // Start background radio chatter
-    const stopChatter = communicationService.startRadioChatter(40000)
+    // Start background radio chatter using whichever vehicles are available
+    const stopChatter = communicationService.startRadioChatter(40000, vehicles)
     return () => { unsub(); stopChatter() }
   }, [])
 
@@ -90,6 +90,7 @@ export function CommunicationPanel({ vehicles, selectedVehicle, className }: Pro
         content: input.trim(),
         channel,
         senderName: admin?.name ?? 'NERDC Command',
+        vehicles,
       })
       setInput('')
     } finally {
