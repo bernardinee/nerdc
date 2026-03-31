@@ -101,18 +101,42 @@ function storeExtras(id: string, extras: IncidentExtras) {
   try { localStorage.setItem(EXTRAS_KEY, JSON.stringify(all)) } catch {}
 }
 
+// Sensible severity defaults when the backend omits the field and no localStorage
+// cache exists (e.g. a fresh browser that never created the incident).
+// These are stored back into localStorage so the next load uses the cached value.
+const TYPE_DEFAULT_SEVERITY: Partial<Record<IncidentType, IncidentSeverity>> = {
+  explosion:      'critical',
+  fire:           'high',
+  medical:        'high',
+  accident:       'medium',
+  crime:          'medium',
+  flood:          'medium',
+  missing_person: 'low',
+  other:          'low',
+}
+
 function mergeExtras(incident: Incident): Incident {
   const extras = loadExtras()[incident.id]
-  if (!extras) return incident
+  const severity = (
+    incident.severity ??
+    extras?.severity ??
+    TYPE_DEFAULT_SEVERITY[incident.type]
+  ) as IncidentSeverity | undefined
+
+  // Persist derived severity so subsequent loads don't need the fallback
+  if (severity && !incident.severity && !extras?.severity) {
+    storeExtras(incident.id, { severity })
+  }
+
   return {
     ...incident,
-    severity:    (incident.severity    ?? extras.severity)    as IncidentSeverity | undefined,
-    citizenPhone: incident.citizenPhone ?? extras.citizenPhone,
-    notes:        incident.notes        || extras.notes || '',
+    severity,
+    citizenPhone: incident.citizenPhone ?? extras?.citizenPhone,
+    notes:        incident.notes        || extras?.notes || '',
     location: {
       ...incident.location,
-      address: incident.location.address || extras.address || '',
-      region:  incident.location.region  || extras.region  || '',
+      address: incident.location.address || extras?.address || '',
+      region:  incident.location.region  || extras?.region  || '',
     },
   }
 }
